@@ -1,5 +1,6 @@
 /// <reference types="chrome" />
 import { useEffect, useState } from 'react';
+import jsPDF from 'jspdf';
 
 interface Note {
   time: number;
@@ -22,7 +23,6 @@ export const Popup = () => {
   const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
 
   useEffect(() => {
-    // Load all saved mimi_* videos from localStorage
     const all: Record<string, VideoData> = {};
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
@@ -35,7 +35,6 @@ export const Popup = () => {
     }
     setAllVideos(all);
 
-    // Get current tab and check if it's a YouTube video
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tab = tabs[0];
       if (!tab.url) return;
@@ -106,6 +105,16 @@ export const Popup = () => {
     });
   };
 
+  const handleExportPDF = () => {
+    if (!activeVideoId) return;
+    const doc = new jsPDF();
+    doc.text(videoTitle || "Mimi Notes", 10, 10);
+    notes.forEach((note, i) => {
+      doc.text(`${formatTime(note.time)} – ${note.text}`, 10, 20 + i * 10);
+    });
+    doc.save(`${videoTitle || activeVideoId}_notes.pdf`);
+  };
+
   const handleGetTimestamp = () => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (!tabs[0].id) return;
@@ -148,10 +157,9 @@ export const Popup = () => {
   };
 
   return (
-    <div className="p-3 w-[300px] text-sm">
+    <div className="p-3 w-[300px] text-sm resize overflow-auto">
       <h1 className="text-lg font-bold mb-2">MimiNotes</h1>
 
-      {/* List All Saved Videos */}
       <div className="mb-4">
         <h2 className="font-semibold mb-1">📁 Your Saved Videos:</h2>
         {Object.entries(allVideos).length === 0 && (
@@ -207,7 +215,7 @@ export const Popup = () => {
           )}
 
           <textarea
-            className="w-full border rounded p-2 text-sm mb-2"
+            className="w-full border rounded p-2 text-sm mb-2 resize"
             rows={2}
             placeholder="Write your note..."
             value={note}
@@ -226,7 +234,13 @@ export const Popup = () => {
               onClick={handleExport}
               className="bg-yellow-500 text-white text-xs px-2 py-1 rounded w-full"
             >
-              ⬇️ Export
+              ⬇️ Export JSON
+            </button>
+            <button
+              onClick={handleExportPDF}
+              className="bg-purple-600 text-white text-xs px-2 py-1 rounded w-full"
+            >
+              📝 PDF
             </button>
             <button
               onClick={handleDeleteVideo}
