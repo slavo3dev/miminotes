@@ -1,1 +1,0 @@
-console.log('[MimiNotes] Content script loaded on YouTube.');

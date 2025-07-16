@@ -13,7 +13,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         popup: 'popup.html',
-        content: 'src/content.ts',
+        content: 'src/content.tsx',
         background: 'src/background.ts',
       },
       output: {
