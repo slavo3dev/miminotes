@@ -35,6 +35,7 @@ export const Popup = () => {
     }
     setAllVideos(all);
 
+
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tab = tabs[0];
       if (!tab.url) return;
@@ -69,6 +70,7 @@ export const Popup = () => {
     setNotes(updatedNotes);
     setAllVideos({ ...allVideos, [activeVideoId]: updated });
     localStorage.setItem(`mimi_${activeVideoId}`, JSON.stringify(updated));
+
     setNote('');
   };
 
@@ -79,6 +81,7 @@ export const Popup = () => {
     setNotes(updatedNotes);
     setAllVideos({ ...allVideos, [activeVideoId]: updated });
     localStorage.setItem(`mimi_${activeVideoId}`, JSON.stringify(updated));
+
   };
 
   const handleDeleteVideo = () => {
@@ -156,6 +159,14 @@ export const Popup = () => {
     return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
+  const toggleStickyNote = () => {
+    console.log("Pressed toggleStickyNote");
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (!tabs[0].id) return;
+      chrome.tabs.sendMessage(tabs[0].id, { type: 'TOGGLE_MIMI_NOTE' });
+    });
+};
+
   return (
     <div className="p-3 w-[300px] text-sm resize overflow-auto">
       <h1 className="text-lg font-bold mb-2">MimiNotes</h1>
@@ -198,6 +209,7 @@ export const Popup = () => {
               const updated = { title: e.target.value, notes };
               setAllVideos({ ...allVideos, [activeVideoId]: updated });
               localStorage.setItem(`mimi_${activeVideoId}`, JSON.stringify(updated));
+
             }}
             placeholder="Video title..."
             className="w-full border text-sm p-1 rounded mb-2"
@@ -270,6 +282,9 @@ export const Popup = () => {
               </li>
             ))}
           </ul>
+          <button onClick={toggleStickyNote} className="bg-blue-700 text-white px-2 py-1 rounded mb-2 w-full">
+            📝 Show Sticky Note
+          </button>
         </>
       )}
     </div>
