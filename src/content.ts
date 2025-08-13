@@ -1,5 +1,7 @@
 /// <reference types="chrome" />
 
+console.log('✅ MimiNotes content loaded v2');
+
 type MimiNote = { id: string; time: number; text: string; videoId: string; createdAt: number };
 type MimiVideoData = { title: string; notes: MimiNote[] };
 
@@ -95,17 +97,16 @@ async function mountSticky(videoId: string) {
     left: `${pos.x}px`,
     top: `${pos.y}px`,
     zIndex: '2147483647',
-    width: '340px',
+    width: '360px',
     background: '#0b0b0b',
-    color: '#e5e7eb', // zinc-200
+    color: '#e5e7eb',
     padding: '12px',
     borderRadius: '14px',
-    border: '1px solid #27272a', // zinc-800
+    border: '1px solid #27272a',
     boxShadow: '0 12px 30px rgba(0,0,0,0.55)',
     fontFamily:
       'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif',
   } as CSSStyleDeclaration);
-
   (wrapper.style as any).backdropFilter = 'blur(2px)';
 
   // header (drag handle)
@@ -124,158 +125,131 @@ async function mountSticky(videoId: string) {
 
   const closeBtn = document.createElement('button');
   closeBtn.textContent = '×';
-  Object.assign(closeBtn.style, {
-    height: '24px',
-    width: '24px',
-    borderRadius: '8px',
-    border: '1px solid #3f3f46', // zinc-700
-    background: 'transparent',
-    color: '#a1a1aa', // zinc-400
-    cursor: 'pointer',
-  });
-  closeBtn.onmouseenter = () => {
-    closeBtn.style.background = '#18181b';
-    closeBtn.style.color = '#e4e4e7';
-    closeBtn.style.borderColor = '#52525b';
-  };
-  closeBtn.onmouseleave = () => {
-    closeBtn.style.background = 'transparent';
-    closeBtn.style.color = '#a1a1aa';
-    closeBtn.style.borderColor = '#3f3f46';
-  };
+  Object.assign(closeBtn.style, iconBtnStyle());
   closeBtn.onclick = () => wrapper.remove();
 
   header.appendChild(title);
   header.appendChild(closeBtn);
   wrapper.appendChild(header);
 
-  // grid: textarea + right column buttons
-  const grid = document.createElement('div');
-  Object.assign(grid.style, {
-    display: 'grid',
-    gridTemplateColumns: '1fr 110px',
-    gap: '8px',
-    alignItems: 'start',
-    marginBottom: '8px',
-  });
-
+  // textarea (full width)
   const textarea = document.createElement('textarea');
   Object.assign(textarea.style, {
-    width: '100%',
-    minHeight: '72px',
+    width: '93%',
+    minHeight: '80px',
     borderRadius: '10px',
     border: '1px solid #3f3f46',
-    backgroundColor: '#111113', // deep charcoal
+    backgroundColor: '#111113',
     color: '#e5e7eb',
     outline: 'none',
     padding: '10px 12px',
     fontSize: '13px',
   } as CSSStyleDeclaration);
   textarea.placeholder = 'Write your note…';
+  wrapper.appendChild(textarea);
 
-  const btnCol = document.createElement('div');
-  Object.assign(btnCol.style, {
-    display: 'flex',
-    flexDirection: 'column',
+  // buttons row under textarea
+  const btnRow = document.createElement('div');
+  Object.assign(btnRow.style, {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
     gap: '8px',
+    marginTop: '8px',
+    marginBottom: '10px',
   });
 
-  // timestamp button (align & height match popup)
   const tsBtn = document.createElement('button');
   tsBtn.textContent = '⏱ timestamp';
-  Object.assign(tsBtn.style, baseBtnStyle({
-    bg: '#0a0a0a',
-    border: '#3f3f46',
-    color: '#e5e7eb',
-    hoverBg: '#18181b',
-    hoverBorder: '#52525b',
-  }));
+  Object.assign(tsBtn.style, filledBtnStyle({ tone: 'dark' }));
 
-  // add button (light)
   const addBtn = document.createElement('button');
   addBtn.textContent = '➕ add';
-  Object.assign(addBtn.style, baseBtnStyle({
-    bg: '#e5e7eb',
-    border: '#3f3f46',
-    color: '#000',
-    hoverBg: '#ffffff',
-    hoverBorder: '#52525b',
-    bold: true,
-  }));
+  Object.assign(addBtn.style, filledBtnStyle({ tone: 'light', bold: true }));
 
-  btnCol.appendChild(tsBtn);
-  btnCol.appendChild(addBtn);
+  btnRow.appendChild(tsBtn);
+  btnRow.appendChild(addBtn);
+  wrapper.appendChild(btnRow);
 
-  grid.appendChild(textarea);
-  grid.appendChild(btnCol);
-  wrapper.appendChild(grid);
-
-  // subtle toolbar row (clear all)
-  const toolsRow = document.createElement('div');
-  Object.assign(toolsRow.style, {
-    display: 'flex',
-    justifyContent: 'flex-end',
-    marginBottom: '6px',
+  // divider with title
+  const divider = document.createElement('div');
+  Object.assign(divider.style, {
+    position: 'relative',
+    margin: '6px 0 10px',
+    height: '20px',
   });
-  const clearBtn = document.createElement('button');
-  clearBtn.textContent = '🗑 clear all';
-  Object.assign(clearBtn.style, {
-    height: '28px',
+  const line = document.createElement('div');
+  Object.assign(line.style, {
+    position: 'absolute',
+    top: '50%',
+    left: 0,
+    right: 0,
+    height: '1px',
+    background: '#27272a',
+    transform: 'translateY(-50%)',
+  });
+  const chip = document.createElement('span');
+  chip.textContent = 'MimiNotes · List';
+  Object.assign(chip.style, {
+    position: 'relative',
+    display: 'inline-block',
+    margin: '0 auto',
     padding: '0 10px',
-    borderRadius: '8px',
-    border: '1px solid #7f1d1d',
-    background: '#b91c1c',
-    color: '#fff',
     fontSize: '11px',
-    cursor: 'pointer',
+    color: '#d4d4d8',
+    background: '#0b0b0b',
+    left: '50%',
+    transform: 'translateX(-50%)',
   });
-  clearBtn.onmouseenter = () => (clearBtn.style.background = '#dc2626');
-  clearBtn.onmouseleave = () => (clearBtn.style.background = '#b91c1c');
-  toolsRow.appendChild(clearBtn);
-  wrapper.appendChild(toolsRow);
+  divider.appendChild(line);
+  divider.appendChild(chip);
+  wrapper.appendChild(divider);
 
   // list
   const listEl = document.createElement('ul');
   Object.assign(listEl.style, {
-    marginTop: '4px',
-    maxHeight: '200px',
+    marginTop: '0px',
+    maxHeight: '220px',
     overflowY: 'auto',
     paddingLeft: '0',
     listStyle: 'none',
   });
   wrapper.appendChild(listEl);
 
+  // bottom actions (clear all)
+  const bottomRow = document.createElement('div');
+  Object.assign(bottomRow.style, {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    marginTop: '10px',
+  });
+  const clearBtn = document.createElement('button');
+  clearBtn.textContent = '🗑 clear all';
+  Object.assign(clearBtn.style, dangerBtnStyle());
+  bottomRow.appendChild(clearBtn);
+  wrapper.appendChild(bottomRow);
+
   document.body.appendChild(wrapper);
 
   // render existing notes
   renderNoteList(data.notes, listEl, videoId);
 
-  // timestamp button just previews current time by inserting a prefix
+  // timestamp → prefix time in textarea (visual aid)
   tsBtn.onclick = () => {
     const video = getVideoEl();
     const t = video ? Math.floor(video.currentTime) : null;
     if (t == null) return;
     const prefix = `${formatTime(t)} – `;
-    // only prefix if not already present
-    if (!textarea.value.startsWith(prefix)) {
-      textarea.value = prefix + textarea.value;
-    }
+    if (!textarea.value.startsWith(prefix)) textarea.value = prefix + textarea.value;
   };
 
-  // add note (takes current time + text)
+  // add note (takes current video time)
   addBtn.onclick = async () => {
     const video = getVideoEl();
     const time = video ? Math.floor(video.currentTime) : null;
     const text = textarea.value.trim();
     if (time == null || !text) return;
 
-    const newNote: MimiNote = {
-      id: uuid(),
-      createdAt: Date.now(),
-      time,
-      text,
-      videoId,
-    };
+    const newNote: MimiNote = { id: uuid(), createdAt: Date.now(), time, text, videoId };
     const updated: MimiVideoData = {
       title: data.title || '',
       notes: [...data.notes, newNote].sort((a, b) => b.time - a.time),
@@ -287,6 +261,7 @@ async function mountSticky(videoId: string) {
     renderNoteList(updated.notes, listEl, videoId);
   };
 
+  // clear all at bottom
   clearBtn.onclick = async () => {
     const updated: MimiVideoData = { title: data.title || '', notes: [] };
     await saveVideo(videoId, updated);
@@ -294,7 +269,7 @@ async function mountSticky(videoId: string) {
     renderNoteList([], listEl, videoId);
   };
 
-  // Drag + persist (throttled + clamped)
+  // Drag + persist
   let dragging = false;
   let offX = 0, offY = 0;
   header.onmousedown = (e) => {
@@ -320,14 +295,14 @@ async function mountSticky(videoId: string) {
   document.addEventListener('mousemove', onMove);
   document.addEventListener('mouseup', onUp);
 
-  // cleanup listeners
-  const cleanup = () => {
+  // --- robust cleanup using MutationObserver (replaces deprecated DOMNodeRemoved) ---
+  const disconnectors: Array<() => void> = [];
+
+  const cleanupMouse = () => {
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
   };
-  wrapper.addEventListener('DOMNodeRemoved', cleanup, { once: true });
 
-  // live sync with storage
   const storageListener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (changes, area) => {
     if (area !== 'local') return;
     if (!changes[STORAGE_KEY(videoId)]) return;
@@ -336,40 +311,71 @@ async function mountSticky(videoId: string) {
     renderNoteList(normalized.notes, listEl, videoId);
   };
   chrome.storage.onChanged.addListener(storageListener);
-  wrapper.addEventListener('DOMNodeRemoved', () => chrome.storage.onChanged.removeListener(storageListener), { once: true });
+
+  const cleanupAll = () => {
+    chrome.storage.onChanged.removeListener(storageListener);
+    disconnectors.forEach((fn) => fn());
+    cleanupMouse();
+  };
+
+  // Observe body; when wrapper disappears, clean up.
+  const mo = new MutationObserver(() => {
+    if (!document.body.contains(wrapper)) {
+      cleanupAll();
+      mo.disconnect();
+    }
+  });
+  mo.observe(document.body, { childList: true, subtree: true });
+  disconnectors.push(() => mo.disconnect());
+
+  // also cleanup on navigation
+  const beforeUnload = () => cleanupAll();
+  window.addEventListener('beforeunload', beforeUnload, { once: true });
+  disconnectors.push(() => window.removeEventListener('beforeunload', beforeUnload));
 }
 
-// shared button style builder (keeps both buttons identical height/alignment)
-function baseBtnStyle(opts: { bg: string; border: string; color: string; hoverBg: string; hoverBorder: string; bold?: boolean; }) {
-  const style: Partial<CSSStyleDeclaration> = {
+// ---- styles helpers ----
+function iconBtnStyle(): Partial<CSSStyleDeclaration> {
+  return {
+    height: '24px',
+    width: '24px',
+    borderRadius: '8px',
+    border: '1px solid #3f3f46',
+    background: 'transparent',
+    color: '#a1a1aa',
+    cursor: 'pointer',
+  };
+}
+
+function filledBtnStyle(opts: { tone: 'dark' | 'light'; bold?: boolean }): Partial<CSSStyleDeclaration> {
+  const isDark = opts.tone === 'dark';
+  return {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     height: '36px',
     borderRadius: '10px',
-    border: `1px solid ${opts.border}`,
-    background: opts.bg,
-    color: opts.color,
+    border: '1px solid #3f3f46',
+    background: isDark ? '#0a0a0a' : '#e5e7eb',
+    color: isDark ? '#e5e7eb' : '#000',
     cursor: 'pointer',
     fontSize: '13px',
+    fontWeight: (opts.bold ? 600 : 500) as any,
     transition: 'background .15s ease, border-color .15s ease, color .15s ease',
   };
-  if (opts.bold) (style as any).fontWeight = 600;
+}
 
-  // hover emulation via listeners (since we’re inline styles)
-  const addHover = (btn: HTMLButtonElement) => {
-    btn.onmouseenter = () => {
-      btn.style.background = opts.hoverBg;
-      btn.style.borderColor = opts.hoverBorder;
-    };
-    btn.onmouseleave = () => {
-      btn.style.background = opts.bg;
-      btn.style.borderColor = opts.border;
-    };
+function dangerBtnStyle(): Partial<CSSStyleDeclaration> {
+  return {
+    height: '30px',
+    padding: '0 12px',
+    borderRadius: '10px',
+    border: '1px solid #7f1d1d',
+    background: '#b91c1c',
+    color: '#fff',
+    fontSize: '12px',
+    cursor: 'pointer',
   };
-  // return as any; caller will Object.assign then call addHover
-  (style as any)._addHover = addHover;
-  return style as CSSStyleDeclaration & { _addHover?: (btn: HTMLButtonElement) => void };
 }
 
 function renderNoteList(notes: MimiNote[], container: HTMLElement, videoId: string) {
@@ -382,10 +388,10 @@ function renderNoteList(notes: MimiNote[], container: HTMLElement, videoId: stri
       justifyContent: 'space-between',
       gap: '8px',
       border: '1px solid #27272a',
-      background: 'rgba(9,9,11,0.7)', // zinc-950/70
+      background: 'rgba(9,9,11,0.7)',
       padding: '8px 10px',
       borderRadius: '12px',
-      marginBottom: '6px',
+      marginBottom: '8px',
     });
 
     const left = document.createElement('button');
@@ -427,26 +433,11 @@ function renderNoteList(notes: MimiNote[], container: HTMLElement, videoId: stri
 
     const del = document.createElement('button');
     del.textContent = '×';
-    Object.assign(del.style, {
+    Object.assign(del.style, iconBtnStyle(), {
       height: '24px',
       width: '24px',
-      borderRadius: '8px',
-      border: '1px solid #3f3f46',
-      background: 'transparent',
-      color: '#a1a1aa',
-      cursor: 'pointer',
       flexShrink: '0',
-    });
-    del.onmouseenter = () => {
-      del.style.background = '#18181b';
-      del.style.color = '#e4e4e7';
-      del.style.borderColor = '#52525b';
-    };
-    del.onmouseleave = () => {
-      del.style.background = 'transparent';
-      del.style.color = '#a1a1aa';
-      del.style.borderColor = '#3f3f46';
-    };
+    } as CSSStyleDeclaration);
     del.onclick = async () => {
       const updated = notes.filter((_, i) => i !== idx);
       const next: MimiVideoData = { title: '', notes: updated };
@@ -464,11 +455,11 @@ function renderNoteList(notes: MimiNote[], container: HTMLElement, videoId: stri
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   try {
     if (msg?.type === 'TOGGLE_MIMI_NOTE') {
-      const vid = parseYouTubeId(location.href) || 'default';
-      const existing = document.getElementById(NOTE_ID);
-      if (existing) unmountSticky();
-      else void mountSticky(vid);
-      sendResponse({ ok: true });
+    const vid = parseYouTubeId(location.href) || 'default';
+    const existing = document.getElementById(NOTE_ID);
+    if (existing) unmountSticky();
+    else void mountSticky(vid);
+    sendResponse({ ok: true });
     }
   } catch (e) {
     console.error('MimiNotes error handling message:', e);
