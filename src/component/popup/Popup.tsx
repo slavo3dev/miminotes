@@ -28,14 +28,11 @@ const ensureVideoData = (data: any): MimiVideoData => ({
   notes: Array.isArray(data?.notes) ? data.notes.map(ensureNoteShape) : [],
 });
 
-const parseYouTubeId = (url: string): string | null => {
-  return (
-    url.match(/[?&]v=([\w-]{11})/)?.[1] || // watch?v=
-    url.match(/youtu\.be\/([\w-]{11})/)?.[1] || // youtu.be/ID
-    url.match(/embed\/([\w-]{11})/)?.[1] || // /embed/ID
-    null
-  );
-};
+const parseYouTubeId = (url: string): string | null =>
+  url.match(/[?&]v=([\w-]{11})/)?.[1] ||
+  url.match(/youtu\.be\/([\w-]{11})/)?.[1] ||
+  url.match(/embed\/([\w-]{11})/)?.[1] ||
+  null;
 
 export const Popup = () => {
   const [note, setNote] = useState('');
@@ -46,7 +43,7 @@ export const Popup = () => {
   const [allVideos, setAllVideos] = useState<Record<string, MimiVideoData>>({});
   const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
 
-  // Initial load: all videos + detect current tab's YouTube videoId
+  // Initial load
   useEffect(() => {
     (async () => {
       const allRaw = await loadAll();
@@ -77,11 +74,9 @@ export const Popup = () => {
     })();
   }, []);
 
-  // Live sync: react to chrome.storage updates (from content script / another popup)
+  // Live sync with chrome.storage
   useEffect(() => {
-    const handler: Parameters<
-      typeof chrome.storage.onChanged.addListener
-    >[0] = async (changes, area) => {
+    const handler: Parameters<typeof chrome.storage.onChanged.addListener>[0] = async (changes, area) => {
       if (area !== 'local') return;
       if (!Object.keys(changes).some((k) => k.startsWith('mimi_'))) return;
 
@@ -115,8 +110,22 @@ export const Popup = () => {
     }
   };
 
+  const handleDeleteVideoById = async (id: string) => {
+    // stop if deleting current active video
+    await removeVideo(id);
+    const next = { ...allVideos };
+    delete next[id];
+    setAllVideos(next);
+
+    if (activeVideoId === id) {
+      setNotes([]);
+      setVideoTitle('');
+      setActiveVideoId(null);
+    }
+  };
+
   const handleAddNote = async () => {
-    if (currentTime == null || !activeVideoId || !note.trim()) return; // allow time=0
+    if (currentTime == null || !activeVideoId || !note.trim()) return;
 
     const newNote: MimiNote = {
       id: uuid(),
@@ -168,7 +177,7 @@ export const Popup = () => {
       { type: 'application/json' }
     );
     const url = URL.createObjectURL(blob);
-    chrome.downloads.download({
+    chrome.downloads?.download?.({
       url,
       filename: `${videoTitle || activeVideoId}_mimi_notes.json`,
       saveAs: true,
@@ -228,159 +237,203 @@ export const Popup = () => {
     return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
-  // const toggleStickyNote = () => {
-  //   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-  //     const tabId = tabs[0]?.id;
-  //     if (!tabId) return;
-  //     chrome.tabs.sendMessage(tabId, { type: 'TOGGLE_MIMI_NOTE' });
-  //   });
-  // };
+  const toggleStickyNote = () => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const tabId = tabs[0]?.id;
+      if (!tabId) return;
 
-const toggleStickyNote = () => {
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    const tabId = tabs[0]?.id;
-    if (!tabId) return;
-
-    const sendToggle = () =>
       chrome.tabs.sendMessage(tabId, { type: 'TOGGLE_MIMI_NOTE' }, () => {
         if (chrome.runtime.lastError) {
-          // No listener → inject, then retry
           chrome.scripting.executeScript(
             { target: { tabId }, files: ['content.js'] },
             () => chrome.tabs.sendMessage(tabId, { type: 'TOGGLE_MIMI_NOTE' })
           );
         }
       });
+    });
+  };
 
-    sendToggle();
-  });
-};
-
-
+  // ---------- UI (classy black & white) ----------
   return (
-    <div className="p-3 w-[300px] text-sm resize overflow-auto">
-      <h1 className="text-lg font-bold mb-2">MimiNotes</h1>
+    <div className="w-[360px] max-h-[560px] overflow-auto rounded-2xl bg-[#0b0b0b] text-zinc-200 shadow-2xl border border-zinc-800 p-4">
+      <header className="mb-4">
+        <h1 className="text-xl font-semibold tracking-wide text-zinc-100">MimiNotes</h1>
+        <p className="text-xs text-zinc-400 mt-1">timestamped notes for YouTube</p>
+      </header>
 
-      <div className="mb-4">
-        <h2 className="font-semibold mb-1">📁 Your Saved Videos:</h2>
-        {Object.keys(allVideos).length === 0 && (
-          <p className="text-xs text-gray-500">No videos saved yet.</p>
+      <section className="mb-5">
+        <h2 className="text-sm font-medium text-zinc-300 mb-2">📁 Saved videos</h2>
+        {Object.keys(allVideos).length === 0 ? (
+          <p className="text-xs text-zinc-500">No videos saved yet.</p>
+        ) : (
+          <ul className="space-y-1.5">
+            {Object.entries(allVideos).map(([id, data]) => {
+              const isActive = id === activeVideoId;
+              return (
+                <li
+                  key={id}
+                  onClick={() => handleSelectVideo(id)}
+                  className={`group flex items-center justify-between gap-2 rounded-lg border px-3 py-2 transition
+                    ${isActive ? 'border-zinc-600 bg-zinc-900' : 'border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900/50'}
+                    cursor-pointer`}
+                  title={data.title || 'Untitled'}
+                >
+                  <div className="min-w-0">
+                    <a
+                      href={`https://www.youtube.com/watch?v=${id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className={`truncate underline decoration-zinc-600 underline-offset-4 hover:decoration-zinc-300
+                        ${isActive ? 'text-zinc-100' : 'text-zinc-200 hover:text-zinc-100'}`}
+                    >
+                      {data.title || 'Untitled'}
+                    </a>
+                    <div className="text-[10px] text-zinc-500 mt-0.5">
+                      {data.notes.length} note{data.notes.length !== 1 ? 's' : ''}
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleDeleteVideoById(id);
+                    }}
+                    aria-label="Delete saved video"
+                    className="shrink-0 inline-flex h-6 w-6 items-center justify-center rounded-md border border-zinc-700 text-zinc-400 hover:text-zinc-100 hover:border-zinc-500 hover:bg-zinc-800 transition"
+                    title="Delete saved video"
+                  >
+                    ×
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
         )}
-        <ul className="space-y-1">
-          {Object.entries(allVideos).map(([id, data]) => (
-            <li
-              key={id}
-              className={`cursor-pointer hover:underline ${
-                id === activeVideoId ? 'text-blue-700 font-semibold' : 'text-blue-600'
-              }`}
-              onClick={() => handleSelectVideo(id)}
-            >
-              🔗 {data.title || 'Untitled'} ({data.notes.length})
-            </li>
-          ))}
-        </ul>
-      </div>
+      </section>
 
       {activeVideoId && (
         <>
-          <a
-            href={`https://www.youtube.com/watch?v=${activeVideoId}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs text-blue-600 hover:underline mb-2 block"
-          >
-            ▶️ Open this video
-          </a>
+          {/* Title field */}
+          <div className="mb-3">
+            <label className="text-xs text-zinc-400 mb-1 block">Video title</label>
+            <input
+              value={videoTitle}
+              onChange={async (e) => {
+                if (!activeVideoId) return;
+                const nextTitle = e.target.value;
+                setVideoTitle(nextTitle);
+                const updated: MimiVideoData = { title: nextTitle, notes };
+                setAllVideos({ ...allVideos, [activeVideoId]: updated });
+                await saveVideo(activeVideoId, updated);
+              }}
+              placeholder="Add a title…"
+              className="w-full rounded-lg bg-zinc-900/70 border border-zinc-700 focus:border-zinc-500 focus:outline-none text-sm text-zinc-100 placeholder-zinc-500 px-3 py-2"
+            />
+            <a
+              href={`https://www.youtube.com/watch?v=${activeVideoId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-2 inline-block text-xs underline decoration-zinc-600 underline-offset-4 text-zinc-300 hover:text-zinc-100 hover:decoration-zinc-300"
+            >
+              ▶ open on YouTube
+            </a>
+          </div>
 
-          <input
-            value={videoTitle}
-            onChange={async (e) => {
-              if (!activeVideoId) return;
-              const nextTitle = e.target.value;
-              setVideoTitle(nextTitle);
-              const updated: MimiVideoData = { title: nextTitle, notes };
-              setAllVideos({ ...allVideos, [activeVideoId]: updated });
-              await saveVideo(activeVideoId, updated);
-            }}
-            placeholder="Video title..."
-            className="w-full border text-sm p-1 rounded mb-2"
-          />
+          {/* Timestamp + note input */}
+          <div className="mb-2 grid grid-cols-[1fr,110px] gap-2">
+              <textarea
+                className="rounded-lg bg-zinc-900/70 border border-zinc-700 focus:border-zinc-500 focus:outline-none text-sm text-zinc-100 placeholder-zinc-500 px-3 py-2 resize"
+                rows={2}
+                placeholder="Write your note…"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+              />
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={handleGetTimestamp}
+                  className="flex items-center justify-center h-9 rounded-lg border border-zinc-700 bg-zinc-950 text-zinc-100 hover:bg-zinc-900 hover:border-zinc-600 transition text-sm"
+                >
+                  ⏱ 
+                </button>
+                <button
+                  onClick={handleAddNote}
+                  className="flex items-center justify-center h-9 rounded-lg border border-zinc-700 bg-zinc-100 text-black hover:bg-white transition text-sm font-medium"
+                >
+                  ➕ add
+                </button>
+              </div>
+          </div>
 
-          <button
-            onClick={handleGetTimestamp}
-            className="bg-blue-600 text-white px-2 py-1 rounded mb-2 w-full"
-          >
-            ⏱ Get Timestamp
-          </button>
 
           {currentTime !== null && (
-            <div className="text-sm mb-2">Current time: {formatTime(currentTime)}</div>
+            <div className="text-xs text-zinc-400 mb-3">
+              current time: <span className="text-zinc-200">{formatTime(currentTime)}</span>
+            </div>
           )}
 
-          <textarea
-            className="w-full border rounded p-2 text-sm mb-2 resize"
-            rows={2}
-            placeholder="Write your note..."
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-          />
-
-          <button
-            onClick={handleAddNote}
-            className="bg-green-600 text-white px-3 py-1 rounded w-full mb-2"
-          >
-            ➕ Add Note
-          </button>
-
-          <div className="flex gap-2 mb-4">
+          {/* Exports & delete all */}
+          <div className="mb-4 grid grid-cols-3 gap-2">
             <button
               onClick={handleExport}
-              className="bg-yellow-500 text-white text-xs px-2 py-1 rounded w-full"
+              className="rounded-lg border border-zinc-700 bg-zinc-950 text-zinc-200 hover:bg-zinc-900 hover:border-zinc-600 transition text-xs py-2"
             >
-              ⬇️ Export JSON
+              ⬇ JSON
             </button>
             <button
               onClick={handleExportPDF}
-              className="bg-purple-600 text-white text-xs px-2 py-1 rounded w-full"
+              className="rounded-lg border border-zinc-700 bg-zinc-950 text-zinc-200 hover:bg-zinc-900 hover:border-zinc-600 transition text-xs py-2"
             >
               📝 PDF
             </button>
             <button
               onClick={handleDeleteVideo}
-              className="bg-red-600 text-white text-xs px-2 py-1 rounded w-full"
+              className="rounded-lg border border-zinc-800 bg-red-600/80 text-white hover:bg-red-600 transition text-xs py-2"
             >
-              🗑 Delete All
+              🗑 clear all
             </button>
           </div>
 
-          <h2 className="font-semibold text-sm mb-1">Notes:</h2>
-          {notes.length === 0 && <p className="text-xs text-gray-500">No notes yet.</p>}
-          <ul className="space-y-1">
-            {notes.map((n, i) => (
-              <li key={n.id || i} className="flex justify-between items-center text-sm">
-                <span
-                  onClick={() => jumpTo(n.time)}
-                  className="text-blue-600 hover:underline cursor-pointer"
-                  title={new Date(n.createdAt).toLocaleString()}
+          {/* Notes list */}
+          <h2 className="text-sm font-medium text-zinc-300 mb-2">Notes</h2>
+          {notes.length === 0 ? (
+            <p className="text-xs text-zinc-500 mb-2">No notes yet.</p>
+          ) : (
+            <ul className="space-y-1.5 mb-3">
+              {notes.map((n, i) => (
+                <li
+                  key={n.id || i}
+                  className="flex items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-zinc-950/60 hover:bg-zinc-900/70 px-3 py-2"
                 >
-                  {formatTime(n.time)} – {n.text}
-                </span>
-                <button
-                  onClick={() => handleDeleteNote(i)}
-                  className="ml-2 text-red-500 hover:text-red-700"
-                  aria-label="Delete note"
-                >
-                  ✕
-                </button>
-              </li>
-            ))}
-          </ul>
+                  <button
+                    onClick={() => jumpTo(n.time)}
+                    className="text-left flex-1 text-zinc-200 hover:text-white transition"
+                    title={new Date(n.createdAt).toLocaleString()}
+                  >
+                    <span className="inline-block text-[10px] px-2 py-0.5 rounded-full border border-zinc-700 bg-zinc-900 text-zinc-300 mr-2">
+                      {formatTime(n.time)}
+                    </span>
+                    {n.text}
+                  </button>
+
+                  <button
+                    onClick={() => handleDeleteNote(i)}
+                    className="shrink-0 inline-flex h-6 w-6 items-center justify-center rounded-md border border-zinc-700 text-zinc-400 hover:text-zinc-100 hover:border-zinc-500 hover:bg-zinc-800 transition"
+                    aria-label="Delete note"
+                    title="Delete note"
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
 
           <button
             onClick={toggleStickyNote}
-            className="bg-blue-700 text-white px-2 py-1 rounded mb-2 w-full"
+            className="w-full rounded-lg border border-zinc-700 bg-zinc-950 text-zinc-100 hover:bg-zinc-900 hover:border-zinc-600 transition text-sm py-2.5"
           >
-            📝 Show Sticky Note
+            📝 show sticky note
           </button>
         </>
       )}
