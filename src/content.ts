@@ -1,188 +1,358 @@
-console.log('🔥 MimiNotes content.ts executing');
+/// <reference types="chrome" />
 
-const debugId = 'mimi-debug-injected';
-if (!document.getElementById(debugId)) {
-  const banner = document.createElement('div');
-  banner.textContent = '✅ MimiNotes injected!';
-  banner.id = debugId;
-  Object.assign(banner.style, {
-    position: 'fixed',
-    top: '10px',
-    left: '10px',
-    background: 'black',
-    color: 'lime',
-    padding: '6px 12px',
-    zIndex: '999999',
-  });
-  document.body.appendChild(banner);
+type MimiNote = { id: string; time: number; text: string; videoId: string; createdAt: number };
+type MimiVideoData = { title: string; notes: MimiNote[] };
+
+const key = (videoId: string) => `mimi_${videoId}`;
+const posKey = (videoId: string) => `mimi_pos_${videoId}`;
+
+async function loadVideo(videoId: string): Promise<MimiVideoData | null> {
+  const result = await chrome.storage.local.get(key(videoId));
+  return result[key(videoId)] ?? null;
 }
 
-function getVideoId(): string {
-  const match = window.location.href.match(/[?&]v=([^&#]+)/);
-  return match ? match[1] : 'default';
+ async function saveVideo(videoId: string, data: MimiVideoData): Promise<void> {
+  await chrome.storage.local.set({ [key(videoId)]: data });
 }
 
-function formatTime(sec: number) {
+async function loadAll(): Promise<Record<string, MimiVideoData>> {
+  const all = await chrome.storage.local.get(null);
+  return Object.fromEntries(
+    Object.entries(all)
+      .filter(([k]) => k.startsWith('mimi_'))
+      .map(([k, v]) => [k.replace('mimi_', ''), v as MimiVideoData])
+  );
+}
+
+async function deleteVideo(videoId: string): Promise<void> {
+  await chrome.storage.local.remove(key(videoId));
+}
+
+
+async function loadPosition(videoId: string): Promise<{ x: number; y: number }> {
+  const k = posKey(videoId);
+  const res = await chrome.storage.local.get(k);
+  return res[k] ?? { x: 100, y: 100 };
+}
+
+async function savePosition(videoId: string, pos: { x: number; y: number }): Promise<void> {
+  const k = posKey(videoId);
+  await chrome.storage.local.set({ [k]: pos });
+}
+
+const NOTE_ID = 'mimi-draggable-note';
+const STORAGE_KEY = (vid: string) => `mimi_${vid}`; // for storage change detection
+
+// ---------- utils ----------
+const uuid = () =>
+  (crypto as any)?.randomUUID
+    ? (crypto as any).randomUUID()
+    : `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+const ensureNote = (n: any): MimiNote => ({
+  id: n?.id ?? uuid(),
+  createdAt: n?.createdAt ?? Date.now(),
+  time: Number(n?.time ?? 0),
+  text: String(n?.text ?? ''),
+  videoId: String(n?.videoId ?? ''),
+});
+
+const ensureVideoData = (d: any | null): MimiVideoData => ({
+  title: d && typeof d.title === 'string' ? d.title : '',
+  notes: Array.isArray(d?.notes) ? d.notes.map(ensureNote) : [],
+});
+
+const formatTime = (sec: number) => {
   const m = Math.floor(sec / 60);
   const s = sec % 60;
   return `${m}:${s.toString().padStart(2, '0')}`;
+};
+
+const parseYouTubeId = (url: string): string | null =>
+  url.match(/[?&]v=([\w-]{11})/)?.[1] ||
+  url.match(/youtu\.be\/([\w-]{11})/)?.[1] ||
+  url.match(/embed\/([\w-]{11})/)?.[1] ||
+  null;
+
+const getVideoEl = () => document.querySelector('video') as HTMLVideoElement | null;
+
+function throttle<T extends (...a: any[]) => void>(fn: T, ms: number): T {
+  let last = 0;
+  let timer: number | undefined;
+  return function (this: any, ...args: any[]) {
+    const now = Date.now();
+    if (now - last >= ms) {
+      last = now;
+      // @ts-ignore
+      return fn.apply(this, args);
+    }
+    // @ts-ignore
+    clearTimeout(timer);
+    // @ts-ignore
+    timer = window.setTimeout(() => {
+      last = Date.now();
+      // @ts-ignore
+      fn.apply(this, args);
+    }, Math.max(0, ms - (now - last)));
+  } as T;
 }
 
-function createStickyNote(videoId: string) {
-  if (document.getElementById('mimi-draggable-note')) return;
+// ---------- UI ----------
+function unmountSticky() {
+  document.getElementById(NOTE_ID)?.remove();
+}
 
-  const fullData = JSON.parse(localStorage.getItem(`mimi_${videoId}`) || '{"title":"","notes":[]}');
-  const notes = fullData.notes || [];
+async function mountSticky(videoId: string) {
+  if (document.getElementById(NOTE_ID)) return; // already mounted
 
-  const savedPos = JSON.parse(localStorage.getItem(`mimi_note_pos_${videoId}`) || '{"x":100,"y":100}');
+  const data = ensureVideoData(await loadVideo(videoId)); // load from extension storage
+  const pos = await loadPosition(videoId);
 
   const wrapper = document.createElement('div');
-  wrapper.id = 'mimi-draggable-note';
+  wrapper.id = NOTE_ID;
   Object.assign(wrapper.style, {
     position: 'fixed',
-    left: `${savedPos.x}px`,
-    top: `${savedPos.y}px`,
-    zIndex: '99999',
-    background: 'black',
+    left: `${pos.x}px`,
+    top: `${pos.y}px`,
+    zIndex: '2147483647',
+    background: 'rgba(0,0,0,0.92)',
     color: 'white',
     padding: '10px',
     borderRadius: '8px',
-    width: '260px',
-    fontFamily: 'sans-serif',
-    boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
-    cursor: 'move'
-  });
+    width: '280px',
+    fontFamily:
+      'system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif',
+    boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+    cursor: 'move',
+  } as CSSStyleDeclaration);
+  (wrapper.style as any).backdropFilter = 'blur(2px)';
 
+  // Header
   const header = document.createElement('div');
   Object.assign(header.style, {
     display: 'flex',
     justifyContent: 'space-between',
-    marginBottom: '5px',
+    alignItems: 'center',
+    marginBottom: '6px',
   });
-  header.innerHTML = `
-    <strong style="font-size:13px;">MimiNote</strong>
-    <button style="font-size:12px; background:white; color:black; border:none; cursor:pointer; border-radius:4px; padding: 0 6px">✖</button>
-  `;
-  header.querySelector('button')!.onclick = () => wrapper.remove();
+  const title = document.createElement('strong');
+  title.textContent = 'MimiNotes';
+  Object.assign(title.style, { fontSize: '13px' });
+
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✖';
+  Object.assign(closeBtn.style, {
+    fontSize: '12px',
+    background: 'white',
+    color: 'black',
+    border: 'none',
+    cursor: 'pointer',
+    borderRadius: '4px',
+    padding: '0 6px',
+  });
+  closeBtn.onclick = () => wrapper.remove();
+
+  header.appendChild(title);
+  header.appendChild(closeBtn);
   wrapper.appendChild(header);
 
+  // Textarea
   const textarea = document.createElement('textarea');
   Object.assign(textarea.style, {
     width: '100%',
     fontSize: '12px',
     resize: 'none',
-    border: '1px solid white',
+    border: '1px solid #444',
     borderRadius: '5px',
-    padding: '5px',
+    padding: '6px',
     backgroundColor: 'black',
-    color: 'white'
-  });
+    color: 'white',
+    outline: 'none',
+  } as CSSStyleDeclaration);
   textarea.rows = 2;
   textarea.placeholder = 'Write your note...';
   wrapper.appendChild(textarea);
 
-  const buttonWrapper = document.createElement('div');
-  Object.assign(buttonWrapper.style, {
+  // Buttons row
+  const btnRow = document.createElement('div');
+  Object.assign(btnRow.style, {
     width: '100%',
-    marginTop: '6px'
+    marginTop: '6px',
+    display: 'grid',
+    gridTemplateColumns: '1fr 72px',
+    gap: '6px',
   });
 
-  const btn = document.createElement('button');
-  btn.textContent = '⏱ Add Timestamp';
-  Object.assign(btn.style, {
+  const addBtn = document.createElement('button');
+  addBtn.textContent = '⏱ Add Timestamp';
+  Object.assign(addBtn.style, {
     background: 'white',
     color: 'black',
-    padding: '4px 8px',
+    padding: '6px 8px',
     border: 'none',
     borderRadius: '4px',
     fontSize: '12px',
     width: '100%',
-    cursor: 'pointer'
+    cursor: 'pointer',
   });
-  buttonWrapper.appendChild(btn);
-  wrapper.appendChild(buttonWrapper);
 
+  const clearBtn = document.createElement('button');
+  clearBtn.textContent = 'Clear';
+  Object.assign(clearBtn.style, {
+    background: '#ef4444',
+    color: 'white',
+    border: 'none',
+    borderRadius: '4px',
+    fontSize: '12px',
+    cursor: 'pointer',
+  });
+
+  btnRow.appendChild(addBtn);
+  btnRow.appendChild(clearBtn);
+  wrapper.appendChild(btnRow);
+
+  // List
   const listEl = document.createElement('ul');
   Object.assign(listEl.style, {
     marginTop: '10px',
-    maxHeight: '150px',
+    maxHeight: '180px',
     overflowY: 'auto',
     fontSize: '12px',
     paddingLeft: '0',
-    listStyle: 'none'
+    listStyle: 'none',
   });
   wrapper.appendChild(listEl);
 
   document.body.appendChild(wrapper);
-  renderNoteList(notes, listEl, videoId);
 
-  btn.onclick = () => {
-    const video = document.querySelector('video');
+  // show existing notes immediately
+  renderNoteList(data.notes, listEl, videoId);
+
+  // Add note
+  addBtn.onclick = async () => {
+    const video = getVideoEl();
     const time = video ? Math.floor(video.currentTime) : null;
     const text = textarea.value.trim();
-    if (!text || time === null) return;
+    if (time == null || !text) return;
 
-    const newNote = { time, text, videoId };
-    const updatedNotes = [...(fullData.notes || []), newNote].sort((a, b) => b.time - a.time);
-    const updated = { title: fullData.title || '', notes: updatedNotes };
+    const newNote: MimiNote = {
+      id: uuid(),
+      createdAt: Date.now(),
+      time,
+      text,
+      videoId,
+    };
 
-    localStorage.setItem(`mimi_${videoId}`, JSON.stringify(updated));
+    const updated: MimiVideoData = {
+      title: data.title || '',
+      notes: [...data.notes, newNote].sort((a, b) => b.time - a.time),
+    };
+
+    await saveVideo(videoId, updated);
     textarea.value = '';
-    renderNoteList(updatedNotes, listEl, videoId);
+    data.notes = updated.notes; // local mirror
+    renderNoteList(updated.notes, listEl, videoId);
   };
 
-  // 🧲 Drag logic
-  let isDragging = false;
-  let offsetX = 0, offsetY = 0;
+  // Clear all notes for this video
+  clearBtn.onclick = async () => {
+    const updated: MimiVideoData = { title: data.title || '', notes: [] };
+    await saveVideo(videoId, updated);
+    data.notes = [];
+    renderNoteList([], listEl, videoId);
+  };
+
+  // Drag + persist (throttled) + clamp
+  let dragging = false;
+  let offX = 0,
+    offY = 0;
+
   header.onmousedown = (e) => {
-    isDragging = true;
-    offsetX = e.clientX - wrapper.offsetLeft;
-    offsetY = e.clientY - wrapper.offsetTop;
+    dragging = true;
+    offX = e.clientX - wrapper.offsetLeft;
+    offY = e.clientY - wrapper.offsetTop;
     document.body.style.userSelect = 'none';
   };
-  document.onmouseup = () => {
-    if (isDragging) {
-      isDragging = false;
-      localStorage.setItem(`mimi_note_pos_${videoId}`, JSON.stringify({
-        x: wrapper.offsetLeft,
-        y: wrapper.offsetTop
-      }));
-      document.body.style.userSelect = 'auto';
-    }
+
+  const savePosThrottled = throttle((x: number, y: number) => {
+    void savePosition(videoId, { x, y });
+  }, 250);
+
+  const onMove = (e: MouseEvent) => {
+    if (!dragging) return;
+    const x = Math.min(
+      Math.max(0, e.clientX - offX),
+      window.innerWidth - wrapper.offsetWidth
+    );
+    const y = Math.min(
+      Math.max(0, e.clientY - offY),
+      window.innerHeight - wrapper.offsetHeight
+    );
+    wrapper.style.left = `${x}px`;
+    wrapper.style.top = `${y}px`;
+    savePosThrottled(x, y);
   };
-  document.onmousemove = (e) => {
-    if (isDragging) {
-      wrapper.style.left = `${e.clientX - offsetX}px`;
-      wrapper.style.top = `${e.clientY - offsetY}px`;
-    }
+
+  const onUp = () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.style.userSelect = 'auto';
   };
+
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+
+  // Cleanup on unmount
+  const cleanup = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+  };
+  wrapper.addEventListener('DOMNodeRemoved', cleanup, { once: true });
+
+  // Live sync: re-render if notes for this video change elsewhere (popup/another tab)
+  const storageListener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
+    changes,
+    area
+  ) => {
+    if (area !== 'local') return;
+    if (!changes[STORAGE_KEY(videoId)]) return;
+    const newVal = changes[STORAGE_KEY(videoId)].newValue;
+    const normalized = ensureVideoData(newVal);
+    data.notes = normalized.notes;
+    renderNoteList(normalized.notes, listEl, videoId);
+  };
+
+  chrome.storage.onChanged.addListener(storageListener);
+  wrapper.addEventListener(
+    'DOMNodeRemoved',
+    () => chrome.storage.onChanged.removeListener(storageListener),
+    { once: true }
+  );
 }
 
-function renderNoteList(
-  notes: { time: number; text: string; videoId: string }[],
-  container: HTMLElement,
-  videoId: string
-) {
+function renderNoteList(notes: MimiNote[], container: HTMLElement, videoId: string) {
   container.innerHTML = '';
-  notes.forEach((note, i) => {
+  notes.forEach((n, idx) => {
     const li = document.createElement('li');
     Object.assign(li.style, {
       marginBottom: '6px',
       display: 'flex',
       justifyContent: 'space-between',
-      alignItems: 'center'
+      alignItems: 'center',
+      gap: '6px',
     });
 
     const span = document.createElement('span');
-    span.textContent = `${formatTime(note.time)} – ${note.text}`;
+    span.textContent = `${formatTime(n.time)} – ${n.text}`;
     Object.assign(span.style, {
       cursor: 'pointer',
-      color: 'red',
-      flex: '1'
+      color: '#7dd3fc',
+      flex: '1',
     });
+    span.title = new Date(n.createdAt).toLocaleString();
     span.onclick = () => {
-      const video = document.querySelector('video');
-      if (video) video.currentTime = note.time;
+      const video = getVideoEl();
+      if (video) video.currentTime = n.time;
     };
 
     const del = document.createElement('button');
@@ -193,14 +363,13 @@ function renderNoteList(
       color: 'black',
       cursor: 'pointer',
       fontSize: '12px',
-      marginLeft: '8px',
-      borderRadius: '4px'
+      borderRadius: '4px',
+      padding: '0 6px',
     });
-    del.onclick = () => {
-      const updated = notes.filter((_, idx) => idx !== i);
-      const fullData = JSON.parse(localStorage.getItem(`mimi_${videoId}`) || '{"title":"","notes":[]}');
-      const updatedData = { title: fullData.title, notes: updated };
-      localStorage.setItem(`mimi_${videoId}`, JSON.stringify(updatedData));
+    del.onclick = async () => {
+      const updated = notes.filter((_, i) => i !== idx);
+      const next: MimiVideoData = { title: '', notes: updated };
+      await saveVideo(videoId, next);
       renderNoteList(updated, container, videoId);
     };
 
@@ -210,11 +379,50 @@ function renderNoteList(
   });
 }
 
-// 🔁 Listen for popup toggle
-chrome.runtime.onMessage.addListener((message) => {
-  if (message.type === 'TOGGLE_MIMI_NOTE') {
-    const videoId = getVideoId();
-    console.log('📩 Showing sticky note for videoId:', videoId);
-    createStickyNote(videoId);
+// Listen for popup toggle with error reporting + response
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  try {
+    if (msg?.type === 'TOGGLE_MIMI_NOTE') {
+      const vid = parseYouTubeId(location.href) || 'default';
+      const existing = document.getElementById(NOTE_ID);
+
+      if (existing) {
+        unmountSticky(); // toggle off
+      } else {
+        void mountSticky(vid); // toggle on
+      }
+
+      sendResponse({ ok: true });
+    }
+  } catch (e) {
+    console.error('MimiNotes error handling message:', e);
+    sendResponse({ ok: false, error: String(e) });
   }
+
+  // No async sendResponse later; keep the channel synchronous.
+  return false;
 });
+
+
+// (Optional) tiny injected banner
+(() => {
+  const id = 'mimi-debug-injected';
+  if (!document.getElementById(id)) {
+    const el = document.createElement('div');
+    el.id = id;
+    el.textContent = '✅ MimiNotes injected!';
+    Object.assign(el.style, {
+      position: 'fixed',
+      top: '10px',
+      left: '10px',
+      background: 'black',
+      color: 'lime',
+      padding: '6px 12px',
+      zIndex: '2147483647',
+      borderRadius: '6px',
+      fontFamily: 'monospace',
+    });
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 1000);
+  }
+})();

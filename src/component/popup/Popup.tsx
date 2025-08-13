@@ -1,95 +1,161 @@
 /// <reference types="chrome" />
 import { useEffect, useState } from 'react';
 import jsPDF from 'jspdf';
+import {
+  loadAll,
+  loadVideo,
+  saveVideo,
+  deleteVideo as removeVideo,
+} from '../../helper/storage';
+import type { MimiNote, MimiVideoData } from '../../helper/storage';
 
-interface Note {
-  time: number;
-  text: string;
-  videoId: string;
-}
+// ---------- helpers: migration & utils ----------
+const uuid = () =>
+  (crypto as any)?.randomUUID
+    ? (crypto as any).randomUUID()
+    : `${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
-interface VideoData {
-  title: string;
-  notes: Note[];
-}
+const ensureNoteShape = (n: any): MimiNote => ({
+  id: n?.id ?? uuid(),
+  createdAt: n?.createdAt ?? Date.now(),
+  time: Number(n?.time ?? 0),
+  text: String(n?.text ?? ''),
+  videoId: String(n?.videoId ?? ''),
+});
+
+const ensureVideoData = (data: any): MimiVideoData => ({
+  title: typeof data?.title === 'string' ? data.title : '',
+  notes: Array.isArray(data?.notes) ? data.notes.map(ensureNoteShape) : [],
+});
+
+const parseYouTubeId = (url: string): string | null => {
+  return (
+    url.match(/[?&]v=([\w-]{11})/)?.[1] || // watch?v=
+    url.match(/youtu\.be\/([\w-]{11})/)?.[1] || // youtu.be/ID
+    url.match(/embed\/([\w-]{11})/)?.[1] || // /embed/ID
+    null
+  );
+};
 
 export const Popup = () => {
   const [note, setNote] = useState('');
   const [currentTime, setCurrentTime] = useState<number | null>(null);
   const [videoId, setVideoId] = useState('');
   const [videoTitle, setVideoTitle] = useState('');
-  const [notes, setNotes] = useState<Note[]>([]);
-  const [allVideos, setAllVideos] = useState<Record<string, VideoData>>({});
+  const [notes, setNotes] = useState<MimiNote[]>([]);
+  const [allVideos, setAllVideos] = useState<Record<string, MimiVideoData>>({});
   const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
 
+  // Initial load: all videos + detect current tab's YouTube videoId
   useEffect(() => {
-    const all: Record<string, VideoData> = {};
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith('mimi_')) {
-        const data = localStorage.getItem(key);
-        if (data) {
-          all[key.replace('mimi_', '')] = JSON.parse(data);
-        }
-      }
-    }
-    setAllVideos(all);
+    (async () => {
+      const allRaw = await loadAll();
+      const all = Object.fromEntries(
+        Object.entries(allRaw).map(([k, v]) => [k, ensureVideoData(v)])
+      );
+      setAllVideos(all);
 
+      chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+        const url = tabs[0]?.url || '';
+        const ytId = parseYouTubeId(url);
+        if (!ytId) return;
 
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const tab = tabs[0];
-      if (!tab.url) return;
-      const match = tab.url.match(/v=([\w-]+)/);
-      if (match) {
-        const id = match[1];
-        setVideoId(id);
-        setActiveVideoId(id);
-        const data = all[id];
+        setVideoId(ytId);
+        setActiveVideoId(ytId);
+
+        const dataRaw = all[ytId] ?? (await loadVideo(ytId));
+        const data = dataRaw ? ensureVideoData(dataRaw) : null;
+
         if (data) {
-          setVideoTitle(data.title || '');
-          setNotes(data.notes || []);
+          setVideoTitle(data.title);
+          setNotes(Array.isArray(data.notes) ? data.notes : []);
+        } else {
+          setVideoTitle('');
+          setNotes([]);
         }
-      }
-    });
+      });
+    })();
   }, []);
 
-  const handleSelectVideo = (id: string) => {
-    const data = allVideos[id];
+  // Live sync: react to chrome.storage updates (from content script / another popup)
+  useEffect(() => {
+    const handler: Parameters<
+      typeof chrome.storage.onChanged.addListener
+    >[0] = async (changes, area) => {
+      if (area !== 'local') return;
+      if (!Object.keys(changes).some((k) => k.startsWith('mimi_'))) return;
+
+      const allRaw = await loadAll();
+      const all = Object.fromEntries(
+        Object.entries(allRaw).map(([k, v]) => [k, ensureVideoData(v)])
+      );
+      setAllVideos(all);
+
+      if (activeVideoId) {
+        const dataRaw = await loadVideo(activeVideoId);
+        const data = dataRaw ? ensureVideoData(dataRaw) : null;
+        if (data) {
+          setVideoTitle(data.title);
+          setNotes(Array.isArray(data.notes) ? data.notes : []);
+        }
+      }
+    };
+
+    chrome.storage.onChanged.addListener(handler);
+    return () => chrome.storage.onChanged.removeListener(handler);
+  }, [activeVideoId]);
+
+  const handleSelectVideo = async (id: string) => {
+    const dataRaw = allVideos[id] ?? (await loadVideo(id));
+    const data = dataRaw ? ensureVideoData(dataRaw) : null;
     if (data) {
       setActiveVideoId(id);
       setVideoTitle(data.title);
-      setNotes(data.notes);
+      setNotes(Array.isArray(data.notes) ? data.notes : []);
     }
   };
 
-  const handleAddNote = () => {
-    if (!currentTime || !activeVideoId || !note.trim()) return;
-    const newNote: Note = { time: currentTime, text: note.trim(), videoId: activeVideoId };
+  const handleAddNote = async () => {
+    if (currentTime == null || !activeVideoId || !note.trim()) return; // allow time=0
+
+    const newNote: MimiNote = {
+      id: uuid(),
+      createdAt: Date.now(),
+      time: currentTime,
+      text: note.trim(),
+      videoId: activeVideoId,
+    };
+
     const updatedNotes = [...notes, newNote].sort((a, b) => b.time - a.time);
-    const updated = { title: videoTitle, notes: updatedNotes };
+    const updated: MimiVideoData = { title: videoTitle, notes: updatedNotes };
+
     setNotes(updatedNotes);
     setAllVideos({ ...allVideos, [activeVideoId]: updated });
-    localStorage.setItem(`mimi_${activeVideoId}`, JSON.stringify(updated));
+    await saveVideo(activeVideoId, updated);
 
     setNote('');
   };
 
-  const handleDeleteNote = (index: number) => {
+  const handleDeleteNote = async (index: number) => {
     if (!activeVideoId) return;
+
     const updatedNotes = notes.filter((_, i) => i !== index);
-    const updated = { title: videoTitle, notes: updatedNotes };
+    const updated: MimiVideoData = { title: videoTitle, notes: updatedNotes };
+
     setNotes(updatedNotes);
     setAllVideos({ ...allVideos, [activeVideoId]: updated });
-    localStorage.setItem(`mimi_${activeVideoId}`, JSON.stringify(updated));
-
+    await saveVideo(activeVideoId, updated);
   };
 
-  const handleDeleteVideo = () => {
+  const handleDeleteVideo = async () => {
     if (!activeVideoId) return;
-    const updatedVideos = { ...allVideos };
-    delete updatedVideos[activeVideoId];
-    localStorage.removeItem(`mimi_${activeVideoId}`);
-    setAllVideos(updatedVideos);
+
+    const next = { ...allVideos };
+    delete next[activeVideoId];
+    setAllVideos(next);
+
+    await removeVideo(activeVideoId);
+
     setNotes([]);
     setVideoTitle('');
     setActiveVideoId(null);
@@ -97,9 +163,10 @@ export const Popup = () => {
 
   const handleExport = () => {
     if (!activeVideoId) return;
-    const blob = new Blob([JSON.stringify({ videoTitle, notes }, null, 2)], {
-      type: 'application/json',
-    });
+    const blob = new Blob(
+      [JSON.stringify({ videoTitle, notes }, null, 2)],
+      { type: 'application/json' }
+    );
     const url = URL.createObjectURL(blob);
     chrome.downloads.download({
       url,
@@ -111,29 +178,29 @@ export const Popup = () => {
   const handleExportPDF = () => {
     if (!activeVideoId) return;
     const doc = new jsPDF();
-    doc.text(videoTitle || "Mimi Notes", 10, 10);
-    notes.forEach((note, i) => {
-      doc.text(`${formatTime(note.time)} – ${note.text}`, 10, 20 + i * 10);
+    doc.text(videoTitle || 'Mimi Notes', 10, 10);
+    notes.forEach((n, i) => {
+      doc.text(`${formatTime(n.time)} – ${n.text}`, 10, 20 + i * 10);
     });
     doc.save(`${videoTitle || activeVideoId}_notes.pdf`);
   };
 
   const handleGetTimestamp = () => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (!tabs[0].id) return;
+      const tabId = tabs[0]?.id;
+      if (!tabId) return;
+
       chrome.scripting.executeScript(
         {
-          target: { tabId: tabs[0].id },
+          target: { tabId },
           func: () => {
-            const video = document.querySelector('video');
+            const video = document.querySelector('video') as HTMLVideoElement | null;
             return video ? Math.floor(video.currentTime) : null;
           },
         },
         (results) => {
           const result = results?.[0]?.result;
-          if (typeof result === 'number') {
-            setCurrentTime(result);
-          }
+          if (typeof result === 'number') setCurrentTime(result);
         }
       );
     });
@@ -141,11 +208,13 @@ export const Popup = () => {
 
   const jumpTo = (sec: number) => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (!tabs[0].id) return;
+      const tabId = tabs[0]?.id;
+      if (!tabId) return;
+
       chrome.scripting.executeScript({
-        target: { tabId: tabs[0].id },
+        target: { tabId },
         func: (time: number) => {
-          const video = document.querySelector('video');
+          const video = document.querySelector('video') as HTMLVideoElement | null;
           if (video) video.currentTime = time;
         },
         args: [sec],
@@ -159,13 +228,34 @@ export const Popup = () => {
     return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
-  const toggleStickyNote = () => {
-    console.log("Pressed toggleStickyNote");
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (!tabs[0].id) return;
-      chrome.tabs.sendMessage(tabs[0].id, { type: 'TOGGLE_MIMI_NOTE' });
-    });
+  // const toggleStickyNote = () => {
+  //   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+  //     const tabId = tabs[0]?.id;
+  //     if (!tabId) return;
+  //     chrome.tabs.sendMessage(tabId, { type: 'TOGGLE_MIMI_NOTE' });
+  //   });
+  // };
+
+const toggleStickyNote = () => {
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    const tabId = tabs[0]?.id;
+    if (!tabId) return;
+
+    const sendToggle = () =>
+      chrome.tabs.sendMessage(tabId, { type: 'TOGGLE_MIMI_NOTE' }, () => {
+        if (chrome.runtime.lastError) {
+          // No listener → inject, then retry
+          chrome.scripting.executeScript(
+            { target: { tabId }, files: ['content.js'] },
+            () => chrome.tabs.sendMessage(tabId, { type: 'TOGGLE_MIMI_NOTE' })
+          );
+        }
+      });
+
+    sendToggle();
+  });
 };
+
 
   return (
     <div className="p-3 w-[300px] text-sm resize overflow-auto">
@@ -173,7 +263,7 @@ export const Popup = () => {
 
       <div className="mb-4">
         <h2 className="font-semibold mb-1">📁 Your Saved Videos:</h2>
-        {Object.entries(allVideos).length === 0 && (
+        {Object.keys(allVideos).length === 0 && (
           <p className="text-xs text-gray-500">No videos saved yet.</p>
         )}
         <ul className="space-y-1">
@@ -204,12 +294,13 @@ export const Popup = () => {
 
           <input
             value={videoTitle}
-            onChange={(e) => {
-              setVideoTitle(e.target.value);
-              const updated = { title: e.target.value, notes };
+            onChange={async (e) => {
+              if (!activeVideoId) return;
+              const nextTitle = e.target.value;
+              setVideoTitle(nextTitle);
+              const updated: MimiVideoData = { title: nextTitle, notes };
               setAllVideos({ ...allVideos, [activeVideoId]: updated });
-              localStorage.setItem(`mimi_${activeVideoId}`, JSON.stringify(updated));
-
+              await saveVideo(activeVideoId, updated);
             }}
             placeholder="Video title..."
             className="w-full border text-sm p-1 rounded mb-2"
@@ -266,23 +357,29 @@ export const Popup = () => {
           {notes.length === 0 && <p className="text-xs text-gray-500">No notes yet.</p>}
           <ul className="space-y-1">
             {notes.map((n, i) => (
-              <li key={i} className="flex justify-between items-center text-sm">
+              <li key={n.id || i} className="flex justify-between items-center text-sm">
                 <span
                   onClick={() => jumpTo(n.time)}
                   className="text-blue-600 hover:underline cursor-pointer"
+                  title={new Date(n.createdAt).toLocaleString()}
                 >
                   {formatTime(n.time)} – {n.text}
                 </span>
                 <button
                   onClick={() => handleDeleteNote(i)}
                   className="ml-2 text-red-500 hover:text-red-700"
+                  aria-label="Delete note"
                 >
                   ✕
                 </button>
               </li>
             ))}
           </ul>
-          <button onClick={toggleStickyNote} className="bg-blue-700 text-white px-2 py-1 rounded mb-2 w-full">
+
+          <button
+            onClick={toggleStickyNote}
+            className="bg-blue-700 text-white px-2 py-1 rounded mb-2 w-full"
+          >
             📝 Show Sticky Note
           </button>
         </>
