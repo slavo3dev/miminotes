@@ -2,13 +2,49 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" type="image/png" href="./src/assets/mimi-logo.png" sizes="128x128" />
-    <title>Mimi Notes - Smart Notes</title>
+    <title>MimiNotes - Smart Notes</title>
+
+    <!-- Favicon: copied to dist/ via viteStaticCopy -->
+    <link rel="icon" type="image/png" href="mimi-logo.png" sizes="128x128" />
+
+    <style>
+      body {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+        background: #0b0b0b;
+        color: #e5e7eb;
+        width: 340px;
+        min-height: 420px;
+        display: flex;
+        flex-direction: column;
+      }
+      footer {
+        margin-top: auto;
+        padding: 10px;
+        font-size: 12px;
+        text-align: center;
+        border-top: 1px solid #27272a;
+      }
+      footer a {
+        color: #60a5fa;
+        text-decoration: none;
+        margin: 0 4px;
+      }
+      footer a:hover { text-decoration: underline; }
+    </style>
   </head>
   <body>
     <div id="root"></div>
+
+    <footer>
+      © 2025
+      <a href="https://slavo.io" target="_blank" rel="noopener noreferrer">slavo.io</a> /
+      <a href="https://prototypenext.com" target="_blank" rel="noopener noreferrer">PrototypeNext</a>
+      — All rights reserved.
+    </footer>
+
+    <!-- IMPORTANT: point to the SOURCE file; Vite will rewrite to popup.js in dist/ -->
     <script type="module" src="/src/popup.tsx"></script>
   </body>
 </html>

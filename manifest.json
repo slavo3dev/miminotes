@@ -1,17 +1,26 @@
 {
   "manifest_version": 3,
   "name": "MimiNotes",
-  "version": "1.0",
+  "short_name": "MimiNotes",
+  "version": "1.0.0-beta",
   "description": "Take smart timestamped notes while watching YouTube.",
-  "permissions": ["storage", "scripting", "activeTab"],
+  "permissions": ["storage", "scripting", "activeTab", "downloads"],
   "host_permissions": ["*://*.youtube.com/*"],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
+  "action.default_popup": "popup.html",
+  "icons": {
+    "16": "mimi-logo.png",
+    "48": "mimi-logo.png",
+    "128": "mimi-logo.png"
+  },
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
+      "16": "mimi-logo.png",
+      "48": "mimi-logo.png",
       "128": "mimi-logo.png"
     }
   },
@@ -23,5 +32,3 @@
     }
   ]
 }
-
-
