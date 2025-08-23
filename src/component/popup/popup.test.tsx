@@ -8,6 +8,7 @@ import {
   deleteVideo as removeVideo,
 } from '../../helper/storage';
 import type { MimiNote, MimiVideoData } from '../../helper/storage';
+
 // ANALYTICS
 import {
   trackPopupOpened,
@@ -47,6 +48,7 @@ const parseYouTubeId = (url: string): string | null =>
 export const Popup = () => {
   const [note, setNote] = useState('');
   const [currentTime, setCurrentTime] = useState<number | null>(null);
+  const [videoId, setVideoId] = useState('');
   const [videoTitle, setVideoTitle] = useState('');
   const [notes, setNotes] = useState<MimiNote[]>([]);
   const [allVideos, setAllVideos] = useState<Record<string, MimiVideoData>>({});
@@ -67,6 +69,7 @@ export const Popup = () => {
         const ytId = parseYouTubeId(url);
         if (!ytId) return;
 
+        setVideoId(ytId);
         setActiveVideoId(ytId);
 
         const dataRaw = all[ytId] ?? (await loadVideo(ytId));
@@ -83,9 +86,10 @@ export const Popup = () => {
     })();
   }, []);
 
+  // Popup open analytics
   useEffect(() => {
-  void trackPopupOpened("popup");
-}, []);
+    void trackPopupOpened('popup');
+  }, []);
 
   // Live sync with chrome.storage
   useEffect(() => {
@@ -124,7 +128,6 @@ export const Popup = () => {
   };
 
   const handleDeleteVideoById = async (id: string) => {
-    // stop if deleting current active video
     await removeVideo(id);
     const next = { ...allVideos };
     delete next[id];
@@ -270,6 +273,7 @@ export const Popup = () => {
   };
 
   const toggleStickyNote = () => {
+    // flip local state first (for analytics accuracy)
     const nextOpen = !stickyOpen;
     setStickyOpen(nextOpen);
     if (activeVideoId) {
@@ -282,6 +286,7 @@ export const Popup = () => {
 
       chrome.tabs.sendMessage(tabId, { type: 'TOGGLE_MIMI_NOTE' }, () => {
         if (chrome.runtime.lastError) {
+          // inject if content not present, then retry
           chrome.scripting.executeScript(
             { target: { tabId }, files: ['content.js'] },
             () => chrome.tabs.sendMessage(tabId, { type: 'TOGGLE_MIMI_NOTE' })
@@ -382,29 +387,28 @@ export const Popup = () => {
 
           {/* Timestamp + note input */}
           <div className="mb-2 grid grid-cols-[1fr,110px] gap-2">
-              <textarea
-                className="rounded-lg bg-zinc-900/70 border border-zinc-700 focus:border-zinc-500 focus:outline-none text-sm text-zinc-100 placeholder-zinc-500 px-3 py-2 resize"
-                rows={2}
-                placeholder="Write your note…"
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-              />
-              <div className="flex flex-col gap-2">
-                <button
-                  onClick={handleGetTimestamp}
-                  className="flex items-center justify-center h-9 rounded-lg border border-zinc-700 bg-zinc-950 text-zinc-100 hover:bg-zinc-900 hover:border-zinc-600 transition text-sm"
-                >
-                  ⏱ 
-                </button>
-                <button
-                  onClick={handleAddNote}
-                  className="flex items-center justify-center h-9 rounded-lg border border-zinc-700 bg-zinc-100 text-black hover:bg-white transition text-sm font-medium"
-                >
-                  ➕ add
-                </button>
-              </div>
+            <textarea
+              className="rounded-lg bg-zinc-900/70 border border-zinc-700 focus:border-zinc-500 focus:outline-none text-sm text-zinc-100 placeholder-zinc-500 px-3 py-2 resize"
+              rows={2}
+              placeholder="Write your note…"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+            />
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={handleGetTimestamp}
+                className="flex items-center justify-center h-9 rounded-lg border border-zinc-700 bg-zinc-950 text-zinc-100 hover:bg-zinc-900 hover:border-zinc-600 transition text-sm"
+              >
+                ⏱
+              </button>
+              <button
+                onClick={handleAddNote}
+                className="flex items-center justify-center h-9 rounded-lg border border-zinc-700 bg-zinc-100 text-black hover:bg-white transition text-sm font-medium"
+              >
+                ➕ add
+              </button>
+            </div>
           </div>
-
 
           {currentTime !== null && (
             <div className="text-xs text-zinc-400 mb-3">
@@ -473,7 +477,7 @@ export const Popup = () => {
             onClick={toggleStickyNote}
             className="w-full rounded-lg border border-zinc-700 bg-zinc-950 text-zinc-100 hover:bg-zinc-900 hover:border-zinc-600 transition text-sm py-2.5"
           >
-            📝 show sticky note
+            📝 {stickyOpen ? 'hide' : 'show'} sticky note
           </button>
         </>
       )}
