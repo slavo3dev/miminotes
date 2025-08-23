@@ -8,7 +8,9 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "copy-manifest": "cp manifest.json dist/",
-    "build": "vite build && pnpm copy-manifest"
+    "build": "vite build && pnpm copy-manifest",
+    "zip": "cd dist && zip -r ../miminotes-$npm_package_version.zip . && cd ..",
+    "release": "pnpm build && pnpm zip"
   },
   "dependencies": {
     "jspdf": "^3.0.1",
