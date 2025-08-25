@@ -1,5 +1,5 @@
 /// <reference types="chrome" />
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import jsPDF from 'jspdf';
 import {
   loadAll,
@@ -13,7 +13,6 @@ import {
   trackPopupOpened,
   trackNoteAdded,
   trackExport,
-  // trackTitleEdited, // [READONLY-TITLE] no longer used
   trackNoteDeleted,
   trackNotesCleared,
   trackStickyToggle,
@@ -108,6 +107,26 @@ const fetchTitleFromActiveTab = async (): Promise<string> => {
   });
 };
 
+// [AUTO-TIMESTAMP] Get current time directly on demand (no separate button in UI)
+const getCurrentVideoTime = async (): Promise<number | null> => {
+  return new Promise((resolve) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const tabId = tabs[0]?.id;
+      if (!tabId) return resolve(null);
+      chrome.scripting.executeScript(
+        {
+          target: { tabId },
+          func: () => {
+            const video = document.querySelector('video') as HTMLVideoElement | null;
+            return video ? Math.floor(video.currentTime) : null;
+          },
+        },
+        (results) => resolve((results?.[0]?.result as number) ?? null)
+      );
+    });
+  });
+};
+
 // [NO-AUTOSAVE] Only persist title if the video already has notes stored.
 // Otherwise, just return the detected title to show in UI without saving.
 const ensureVideoTitle = async (
@@ -136,7 +155,6 @@ const ensureVideoTitle = async (
 
 export const Popup = () => {
   const [note, setNote] = useState('');
-  const [currentTime, setCurrentTime] = useState<number | null>(null);
   const [videoTitle, setVideoTitle] = useState('');
   const [notes, setNotes] = useState<MimiNote[]>([]);
   const [allVideos, setAllVideos] = useState<Record<string, MimiVideoData>>({});
@@ -145,6 +163,9 @@ export const Popup = () => {
 
   // [AUTO-REFRESH] Track the active tab id for URL changes
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
+
+  // [BIGGER-NOTE] focus note editor on mount/new video
+  const noteRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Initial load
   useEffect(() => {
@@ -179,6 +200,9 @@ export const Popup = () => {
           const auto = await ensureVideoTitle(ytId, '', false /* hasNotes */);
           setVideoTitle(auto || '');
         }
+
+        // [BIGGER-NOTE]
+        setTimeout(() => noteRef.current?.focus(), 0);
       });
     })();
   }, []);
@@ -237,17 +261,17 @@ export const Popup = () => {
 
         if (data?.notes?.length) {
           setNotes(data.notes);
-          // Ensure a title is persisted if missing (since notes exist)
           const auto = await ensureVideoTitle(newId, data.title ?? '', true /* hasNotes */);
           setVideoTitle(auto || data.title || '');
-          // Mirror in the list cache
           setAllVideos((prev) => ({ ...prev, [newId]: { title: auto || data.title || '', notes: data.notes } }));
         } else {
-          // Not saved yet (0 notes) – do not create storage, just display title in UI
           setNotes([]);
           const auto = await ensureVideoTitle(newId, '', false /* hasNotes */);
           setVideoTitle(auto || '');
         }
+
+        // [BIGGER-NOTE]
+        setTimeout(() => noteRef.current?.focus(), 0);
       }
     };
 
@@ -264,14 +288,12 @@ export const Popup = () => {
     if (data?.notes?.length) {
       setVideoTitle(data.title);
       setNotes(data.notes);
-      // Ensure title is filled/persisted since there are notes
       const auto = await ensureVideoTitle(id, data.title ?? '', true);
       if (auto && auto !== data.title) {
         setVideoTitle(auto);
         setAllVideos((prev) => ({ ...prev, [id]: { title: auto, notes: data.notes } }));
       }
     } else {
-      // Treat as unsaved.
       setNotes([]);
       chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
         const url = tabs[0]?.url || '';
@@ -283,6 +305,9 @@ export const Popup = () => {
         }
       });
     }
+
+    // [BIGGER-NOTE]
+    setTimeout(() => noteRef.current?.focus(), 0);
   };
 
   const handleDeleteVideoById = async (id: string) => {
@@ -298,20 +323,23 @@ export const Popup = () => {
     }
   };
 
-  const handleAddNote = async () => {
-    if (currentTime == null || !activeVideoId || !note.trim()) return;
+  // [AUTO-TIMESTAMP] + [KEYBINDINGS] add note; timestamp pulled automatically
+  const addNoteInternal = async () => {
+    if (!activeVideoId || !note.trim()) return;
+
+    const timeNow = (await getCurrentVideoTime()) ?? 0;
 
     const newNote: MimiNote = {
       id: uuid(),
       createdAt: Date.now(),
-      time: currentTime,
+      time: timeNow,
       text: note.trim(),
       videoId: activeVideoId,
     };
 
     const updatedNotes = [...notes, newNote].sort((a, b) => b.time - a.time);
 
-    // [NO-AUTOSAVE] On FIRST note, we now create/persist the video entry (with title)
+    // First note creates/persists the video entry with title
     const updated: MimiVideoData = {
       title: videoTitle || (await fetchTitleFromActiveTab()) || '',
       notes: updatedNotes,
@@ -321,14 +349,14 @@ export const Popup = () => {
     setAllVideos((prev) => ({ ...prev, [activeVideoId]: updated }));
     await saveVideo(activeVideoId, updated);
 
-    // ANALYTICS
     void trackNoteAdded({
       videoId: activeVideoId,
-      timeSec: currentTime,
+      timeSec: timeNow,
       length: newNote.text.length,
     });
 
     setNote('');
+    setTimeout(() => noteRef.current?.focus(), 0);
   };
 
   const handleDeleteNote = async (index: number) => {
@@ -342,9 +370,7 @@ export const Popup = () => {
       const next = { ...allVideos };
       delete next[activeVideoId];
       setAllVideos(next);
-
       setNotes([]);
-      // Keep title for UI only; do not persist.
     } else {
       const updated: MimiVideoData = { title: videoTitle, notes: updatedNotes };
       setNotes(updatedNotes);
@@ -358,6 +384,10 @@ export const Popup = () => {
   const handleDeleteVideo = async () => {
     if (!activeVideoId) return;
 
+    // [DESTRUCTIVE-SAFE] Confirm and keep button subtle elsewhere
+    const ok = window.confirm('Delete all notes for this video? This cannot be undone.');
+    if (!ok) return;
+
     const next = { ...allVideos };
     delete next[activeVideoId];
     setAllVideos(next);
@@ -366,29 +396,10 @@ export const Popup = () => {
     void trackNotesCleared(activeVideoId);
 
     setNotes([]);
-    // Keep videoTitle only in UI (not persisted)
-  };
-
-  const handleExport = () => {
-    if (!activeVideoId) return;
-    if (notes.length === 0) return; // [NO-AUTOSAVE] nothing to export
-
-    const blob = new Blob([JSON.stringify({ videoTitle, notes }, null, 2)], {
-      type: 'application/json',
-    });
-    const url = URL.createObjectURL(blob);
-    chrome.downloads?.download?.({
-      url,
-      filename: `${videoTitle || activeVideoId}_mimi_notes.json`,
-      saveAs: true,
-    });
-
-    void trackExport('json', activeVideoId);
   };
 
   const handleExportPDF = () => {
-    if (!activeVideoId) return;
-    if (notes.length === 0) return; // [NO-AUTOSAVE]
+    if (!activeVideoId || notes.length === 0) return; // [REMOVE-JSON] & guard
 
     const doc = new jsPDF();
     doc.text(videoTitle || 'Mimi Notes', 10, 10);
@@ -398,43 +409,6 @@ export const Popup = () => {
     doc.save(`${videoTitle || activeVideoId}_notes.pdf`);
 
     void trackExport('pdf', activeVideoId);
-  };
-
-  const handleGetTimestamp = () => {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const tabId = tabs[0]?.id;
-      if (!tabId) return;
-
-      chrome.scripting.executeScript(
-        {
-          target: { tabId },
-          func: () => {
-            const video = document.querySelector('video') as HTMLVideoElement | null;
-            return video ? Math.floor(video.currentTime) : null;
-          },
-        },
-        (results) => {
-          const result = results?.[0]?.result;
-          if (typeof result === 'number') setCurrentTime(result);
-        }
-      );
-    });
-  };
-
-  const jumpTo = (sec: number) => {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const tabId = tabs[0]?.id;
-      if (!tabId) return;
-
-      chrome.scripting.executeScript({
-        target: { tabId },
-        func: (time: number) => {
-          const video = document.querySelector('video') as HTMLVideoElement | null;
-          if (video) video.currentTime = time;
-        },
-        args: [sec],
-      });
-    });
   };
 
   const formatTime = (sec: number) => {
@@ -472,7 +446,6 @@ export const Popup = () => {
     if (auto && auto !== videoTitle) {
       setVideoTitle(auto);
       if (notes.length > 0) {
-        // Persist only if we have notes
         const updated: MimiVideoData = { title: auto, notes };
         setAllVideos((prev) => ({ ...prev, [activeVideoId]: updated }));
         await saveVideo(activeVideoId, updated);
@@ -480,15 +453,40 @@ export const Popup = () => {
     }
   };
 
-  // ---------- UI (classy black & white) ----------
+  // ---------- UI (refined) ----------
   return (
     <div className="w-[360px] max-h-[560px] overflow-auto rounded-2xl bg-[#0b0b0b] text-zinc-200 shadow-2xl border border-zinc-800 p-4">
-      <header className="mb-4">
-        <h1 className="text-xl font-semibold tracking-wide text-zinc-100">MimiNotes</h1>
-        <p className="text-xs text-zinc-400 mt-1">timestamped notes for YouTube</p>
+      {/* Top bar: Sticky + PDF ———— */}
+      <div className="mb-3 flex items-center justify-between">
+        {/* [MOVE-STICKY] */}
+        <button
+          onClick={toggleStickyNote}
+          className="rounded-lg border border-zinc-700 bg-zinc-950 text-zinc-100 hover:bg-zinc-900 hover:border-zinc-600 transition text-sm px-3 py-2"
+          title="Show sticky note overlay on the video"
+        >
+          📝 Sticky notes
+        </button>
+
+        {/* [PDF-IN-HEADER] tiny, secondary */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleExportPDF}
+            disabled={notes.length === 0}
+            className="rounded-md border border-zinc-700 bg-zinc-900/70 px-2.5 py-1.5 text-xs text-zinc-300 hover:text-white hover:border-zinc-500 hover:bg-zinc-900 transition disabled:opacity-40 disabled:cursor-not-allowed"
+            title={notes.length === 0 ? 'Add a note first' : 'Export all notes to PDF'}
+          >
+            📝 PDF
+          </button>
+        </div>
+      </div>
+
+      <header className="mb-3">
+        <h1 className="text-lg font-semibold tracking-wide text-zinc-100">MimiNotes</h1>
+        <p className="text-[11px] text-zinc-400 mt-0.5">Timestamped notes for YouTube</p>
       </header>
 
-      <section className="mb-5">
+      {/* Saved videos ———— */}
+      <section className="mb-4">
         <h2 className="text-sm font-medium text-zinc-300 mb-2">📁 Saved videos</h2>
         {Object.keys(allVideos).length === 0 ? (
           <p className="text-xs text-zinc-500">No videos saved yet.</p>
@@ -539,16 +537,16 @@ export const Popup = () => {
         )}
       </section>
 
+      {/* Title (read-only) ———— */}
       {activeVideoId && (
         <>
-          {/* [READONLY-TITLE] Title is auto-detected & non-editable (no storage unless notes exist) */}
           <div className="mb-3">
             <div className="flex items-center justify-between mb-1">
               <label className="text-xs text-zinc-400">Video title</label>
               <button
                 onClick={handleAutoFillTitle}
                 className="text-[11px] px-2 py-0.5 rounded-md border border-zinc-700 bg-zinc-900/70 text-zinc-300 hover:text-white hover:border-zinc-500 hover:bg-zinc-900 transition"
-                title="Auto-fill from active tab"
+                title="Re-detect from active tab"
               >
                 ↻ auto-fill
               </button>
@@ -568,86 +566,73 @@ export const Popup = () => {
             </a>
           </div>
 
-          {/* Timestamp + note input */}
-          <div className="mb-2 grid grid-cols-[1fr,110px] gap-2">
+          {/* New Note ———— */}
+          <div className="mb-3">
+            {/* bigger editor stays the same */}
             <textarea
-              className="rounded-lg bg-zinc-900/70 border border-zinc-700 focus:border-zinc-500 focus:outline-none text-sm text-zinc-100 placeholder-zinc-500 px-3 py-2 resize"
-              rows={2}
-              placeholder="Write your note…"
+              ref={noteRef}
+              className="w-full rounded-xl bg-zinc-900/70 border border-zinc-700 focus:border-zinc-500 focus:outline-none text-sm text-zinc-100 placeholder-zinc-500 px-3 py-2 resize min-h-[120px]"
+              placeholder="Write your note… (Tip: ⌘/Ctrl + Enter to add)"
               value={note}
               onChange={(e) => setNote(e.target.value)}
+              onKeyDown={async (e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                  e.preventDefault();
+                  await addNoteInternal();
+                }
+              }}
             />
-            <div className="flex flex-col gap-2">
-              <button
-                onClick={handleGetTimestamp}
-                className="flex items-center justify-center h-9 rounded-lg border border-zinc-700 bg-zinc-950 text-zinc-100 hover:bg-zinc-900 hover:border-zinc-600 transition text-sm"
+
+            {/* [CTA-IMPROVE] full-width primary button, no overlap, with shortcut hint */}
+            <button
+              onClick={addNoteInternal}
+              disabled={!note.trim()}
+              title={!note.trim() ? 'Type a note to enable' : 'Add note (⌘/Ctrl + Enter)'}
+              className={[
+                "group relative mt-3 w-full h-11",
+                "rounded-xl border border-zinc-700 bg-zinc-100 text-zinc-900",
+                "font-medium shadow-sm",
+                "hover:bg-white active:scale-[0.99] transition",
+                "focus:outline-none focus:ring-2 focus:ring-zinc-500/50",
+                "disabled:opacity-40 disabled:cursor-not-allowed"
+              ].join(' ')}
+            >
+              {/* left icon */}
+              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-base">＋</span>
+              {/* label */}
+              <span className="text-sm">Add note</span>
+              {/* right shortcut hint */}
+              <kbd
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] px-1.5 py-0.5 rounded-md border border-zinc-400/60 text-zinc-700 bg-white/70 group-hover:bg-white"
+                aria-hidden
               >
-                ⏱
-              </button>
-              <button
-                onClick={handleAddNote}
-                className="flex items-center justify-center h-9 rounded-lg border border-zinc-700 bg-zinc-100 text-black hover:bg-white transition text-sm font-medium"
-              >
-                ➕ add
-              </button>
+                ⌘/Ctrl + ↵
+              </kbd>
+            </button>
+
+            {/* tiny helper text under button */}
+            <div className="mt-2 text-[11px] text-zinc-500">
+              Timestamps are captured automatically from the video.
             </div>
           </div>
 
-          {currentTime !== null && (
-            <div className="text-xs text-zinc-400 mb-3">
-              current time: <span className="text-zinc-200">{formatTime(currentTime)}</span>
-            </div>
-          )}
-
-          {/* Exports & delete all */}
-          <div className="mb-4 grid grid-cols-3 gap-2">
-            <button
-              onClick={handleExport}
-              className="rounded-lg border border-zinc-700 bg-zinc-950 text-zinc-200 hover:bg-zinc-900 hover:border-zinc-600 transition text-xs py-2"
-              disabled={notes.length === 0}
-              title={notes.length === 0 ? 'Add a note first' : 'Export JSON'}
-            >
-              ⬇ JSON
-            </button>
-            <button
-              onClick={handleExportPDF}
-              className="rounded-lg border border-zinc-700 bg-zinc-950 text-zinc-200 hover:bg-zinc-900 hover:border-zinc-600 transition text-xs py-2"
-              disabled={notes.length === 0}
-              title={notes.length === 0 ? 'Add a note first' : 'Export PDF'}
-            >
-              📝 PDF
-            </button>
-            <button
-              onClick={handleDeleteVideo}
-              className="rounded-lg border border-zinc-800 bg-red-600/80 text-white hover:bg-red-600 transition text-xs py-2"
-              disabled={notes.length === 0}
-              title={notes.length === 0 ? 'No saved notes to clear' : 'Clear all notes'}
-            >
-              🗑 clear all
-            </button>
-          </div>
-
-          {/* Notes list */}
+          {/* Notes list ———— */}
           <h2 className="text-sm font-medium text-zinc-300 mb-2">Notes</h2>
           {notes.length === 0 ? (
             <p className="text-xs text-zinc-500 mb-2">No notes yet.</p>
           ) : (
-            <ul className="space-y-1.5 mb-3">
+            <ul className="space-y-1.5 mb-2">
               {notes.map((n, i) => (
                 <li
                   key={n.id || i}
                   className="flex items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-zinc-950/60 hover:bg-zinc-900/70 px-3 py-2"
                 >
-                  <button
-                    onClick={() => jumpTo(n.time)}
-                    className="text-left flex-1 text-zinc-200 hover:text-white transition"
-                    title={new Date(n.createdAt).toLocaleString()}
-                  >
+                  <div className="text-left flex-1 text-zinc-200">
                     <span className="inline-block text-[10px] px-2 py-0.5 rounded-full border border-zinc-700 bg-zinc-900 text-zinc-300 mr-2">
                       {formatTime(n.time)}
                     </span>
                     {n.text}
-                  </button>
+                  </div>
 
                   <button
                     onClick={() => handleDeleteNote(i)}
@@ -662,12 +647,17 @@ export const Popup = () => {
             </ul>
           )}
 
-          <button
-            onClick={toggleStickyNote}
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-950 text-zinc-100 hover:bg-zinc-900 hover:border-zinc-600 transition text-sm py-2.5"
-          >
-            📝 show sticky note
-          </button>
+          {/* [DESTRUCTIVE-SAFE] subtle, after list */}
+          <div className="mt-1 mb-3">
+            <button
+              onClick={handleDeleteVideo}
+              className="text-[11px] text-red-400 hover:text-red-300 underline underline-offset-4 decoration-red-500/60"
+              disabled={notes.length === 0}
+              title={notes.length === 0 ? 'No saved notes to clear' : 'Delete all notes for this video'}
+            >
+              Clear all notes
+            </button>
+          </div>
         </>
       )}
     </div>
