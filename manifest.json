@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "MimiNotes",
   "short_name": "MimiNotes",
-  "version": "0.0.9",
+  "version": "0.1.9",
   "description": "Take smart timestamped notes while watching YouTube.",
   "permissions": ["storage", "scripting", "activeTab", "downloads"],
   "host_permissions": ["*://*.youtube.com/*"],
